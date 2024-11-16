@@ -1,0 +1,389 @@
+---
+title: "Homework #4: Regularization and Variable Selection"
+format:
+  html:
+    embed-resources: true
+editor: visual
+---
+
+**Jacob Norman\
+2024-11-16**
+
+This is the fourth assignment for the course *ISE537: Statistical Models for Systems Analytics in Industrial Engineering*. The topic of this assignment is regularization and variable selection, which includes the following techniques:
+
+-   Stepwise Regression
+
+-   Ridge Regression
+
+-   LASSO Regression
+
+-   Elastic Net
+
+To start, let's read in the required packages.
+
+```{r}
+#install.packages(c("tidyverse", "glmnet", "boot", leaps", "olsrr"))
+library(tidyverse)
+library(boot)
+library(leaps)
+library(glmnet)
+```
+
+The data set for this assignment was obtained from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/510/qsar+bioconcentration+classes+dataset). This one specifically is used for QSAR modeling. The following attributes are included:
+
+-   `nHM`: Number of heavy atoms
+
+-   `piPC09`: Molecular multiple path count
+
+-   `PCD`: Difference between multiple path count and path count
+
+-   `X2Av`: Average valence connectivity
+
+-   `MLOGP`: Moriguchi octanol-water partition coefficient
+
+-   `ON1V`: Overall modified Zagreb index by valence vertex degrees
+
+-   `N-072`: Frequency of RCO-N fragments
+
+-   `B02[C-N]`: 1: Presence of C-N atom pairs; 0: absence of C-N atom pairs.
+
+-   `F04[C-O]`: Frequency of C-O atom pairs
+
+-   `logBCF`: Bioconcentration Factor in log units
+
+Most of these fields mean nothing to me, but we will proceed with the analysis. Let's read in the data as a `tibble` from the supplied CSV file and view its structure.
+
+```{r}
+data <- read_csv("data/Bio_pred.csv")
+summary(data)
+```
+
+To facilitate our later analysis, let's split that data 80-20 into training and testing data sets, respectively.
+
+```{r}
+set.seed(100)
+test_rows <- sample(nrow(data), 0.2 * nrow(data))
+
+test <- data[test_rows, ]
+train <- data[-test_rows,]
+```
+
+### Question 1. Full Model
+
+To begin, let's fit a linear regression model with `logBCF` as the response and all other variable as the predictors.
+
+```{r}
+model1 <- lm(logBCF ~ ., data = train)
+summary(model1)
+```
+
+At the 95 percent confidence level, the following coefficients are significant:
+
+-   `nHM`
+
+-   `piPC09`
+
+-   `MLOGP`
+
+-   `ON1V`
+
+-   `B02[C-N]`
+
+-   `F04[C-O]`
+
+However at the 99 percent confidence level, only three coefficients are still significant:
+
+-   `nHM`
+
+-   `MLOGP`
+
+-   `F04[C-O]`
+
+Let's now compute the cross validation scores for 10-fold cross validation and leave-one-out cross validation. We will use the `boot` package to achieve this and use the function default for the cost function, **M**ean **S**quared **P**rediction **E**rror (MSPE).
+
+```{r}
+# compute cv scores for 10-fold and leave-one-out cross validation
+fold_10 <- cv.glm(train, glm(logBCF ~ ., data = train), K = 10)$delta
+leave_one_out <- cv.glm(train, glm(logBCF ~ ., data = train), K = nrow(train))$delta
+
+# combine results into summary tibble
+cv_scores <- rbind(fold_10, leave_one_out)
+colnames(cv_scores) <- c("Raw MSPE", "Adjusted MSPE")
+add_column(as_tibble(cv_scores), `CV Type` = c("10-fold", "Leave-one-out"), .before = 1)
+```
+
+Let's compute the AIC, BIC, and Mallow's $C_p$ values for the full model.
+
+```{r}
+aic1 <- AIC(model1)
+bic1 <- BIC(model1)
+cp1 <- olsrr::ols_mallows_cp(model1, model1)
+
+tibble(Model = "model1", AIC = aic1, BIC = bic1, Cp = cp1)
+```
+
+Let's fit a new model using only the three predictors that were significant at the 99 percent confidence level and call it `model2`.
+
+```{r}
+model2 <- lm(logBCF ~ nHM + MLOGP + `F04[C-O]`, train)
+summary(model2)
+```
+
+To test the significance of the predictors that we removed from the model, let's use an ANOVA test on this reduced model against the full model.
+
+```{r}
+anova(model1, model2)
+```
+
+Based on a significance level of $\alpha=0.01$, we reject the null hypothesis that all of the additional predictors in the full model have coefficients equal to zero. In other words, we conclude that these predictors cannot all be removed with no loss in explainability. Based on this result, it is not good practice simply to select the most significant predictors based on the full model alone; a variable selection technique, such as stepwise or LASSO regression, would be more appropriate.
+
+### Question 2. Full Model Search
+
+We will now begin variable selection starting with the full model, `model1`. To make things easier, let's separate the `response` from the `predictors`.
+
+```{r}
+response <- train$logBCF
+predictors <- train %>% select(-logBCF)
+```
+
+```{r}
+# select best model predictors using Cp
+cp_output <- leaps(predictors, response, method = "Cp", 
+                   nbest = 1, names = names(predictors))
+
+# manipulate output into nicely formatted tibble
+cp_tibble <- as_tibble(cp_output$which)
+cp_tibble$Cp <- cp_output$Cp
+cp_tibble$size <- cp_output$size
+
+# display tibble
+cp_tibble %>%
+  select(size, Cp, everything())
+```
+
+The total number of possible models with the full set of variables included is only one, since $\binom{9}{9}=1$. The model will the lowest $C_p$ value has seven total predictors, including the intercept. This includes:
+
+-   `nHM`
+
+-   `piPC09`
+
+-   `MLOGP`
+
+-   `ON1V`
+
+-   `B02[C-N]`
+
+-   `F04[C-O]`
+
+Let's fit this as a new model and call it `model3`.
+
+```{r}
+model3 <- lm(logBCF ~ nHM + piPC09 + MLOGP + ON1V + `B02[C-N]` + `F04[C-O]`, train)
+summary(model3)
+```
+
+### Question 3. Stepwise Regression
+
+Now let's conduct a similar analysis using stepwise regression, starting with backward elimination using BIC.
+
+```{r}
+model0 <- lm(logBCF ~ 1, train) # intercept only model
+model4 <- step(model1, scope = list(lower = model0, upper = model1), 
+               direction = "backward", k = log(nrow(train)))
+```
+
+```{r}
+summary(model4)
+```
+
+Using backward elimination, there are four predictors in addition to the intercept:
+
+-   `nHM`
+
+-   `piPC09`
+
+-   `MLOGP`
+
+-   `F04[C-O]`
+
+All of the predictors of `model4`, except the intercept, are significant at the 99 percent confidence level.
+
+We will now perform a similar analysis using forward selection and AIC.
+
+```{r}
+model5 <- step(model0, scope = list(lower = model0, upper = model1), 
+               direction = "forward")
+```
+
+```{r}
+summary(model5)
+```
+
+Using forward selection with AIC resulted in a model that has a different number of predictors when compared to `model4`. The same four selected using backward elimination are included, plus two additional ones:
+
+-   `B0[C-N]`
+
+-   `ON1V`
+
+Let's compare these stepwise models against the full model for several different measures.
+
+```{r}
+adj_rsq1 <- summary(model1)$adj.r.squared
+
+aic3 <- AIC(model3)
+bic3 <- BIC(model3)
+cp3 <- olsrr::ols_mallows_cp(model3, model1)
+adj_rsq3 <- summary(model3)$adj.r.squared
+
+aic4 <- AIC(model4)
+bic4 <- BIC(model4)
+cp4 <- olsrr::ols_mallows_cp(model3, model4)
+adj_rsq4 <- summary(model4)$adj.r.squared
+
+tibble(Model = c("model1", "model3", "model4"),
+       AIC = c(aic1, aic3, aic4),
+       BIC = c(bic1, bic3, bic4),
+       Cp = c(cp1, cp3, cp4),
+       `Adj. R2` = c(adj_rsq1, adj_rsq3, adj_rsq4))
+```
+
+Using the above measures to evaluate the models, I would select `model4` as the preferred model. This is because all three models have similar AIC, BIC, and adjusted $R^2$ values, but the Mallow's $C_p$ value for `model4` is significantly lower than the other two.
+
+### Question 4. Ridge Regression
+
+Let us now conduct a ridge regression analysis to deal with potential multicollinearity issues. First, we need to determine the optimal $\lambda$ using 10-fold cross validation.
+
+```{r}
+# convert tibble of predictors to matrix
+Xpred <- as.matrix(predictors)
+
+# run 10-fold cv for ridge
+ridge_cv <- cv.glmnet(Xpred, response, nfolds = 10, alpha = 0)
+
+# determine optimal lambda
+lambda_opt_ridge <- ridge_cv$lambda.min
+```
+
+The optimal value of $\lambda$ that minimizes the cross validation error is $\lambda^*=$ `r round(lambda_opt_ridge, 4)`. Let's now list the coefficients at this value:
+
+```{r}
+model_ridge <- glmnet(Xpred, response, alpha = 0)
+coef(model_ridge, s = lambda_opt_ridge)
+```
+
+We can see that *all* of the variables are selected. This is because ridge regression is not a variable selection technique, but rather is used for regularization. We can see that all estimated model coefficients are different from what we observed in our full model. This attempts to adjust for potential multicollinearity.
+
+### Question 5. LASSO Regression
+
+Let's now use the `glmnet` package to fit a LASSO regression to determine which variables should be selected. This is very similar to what we did in the last problem, but we need to adjust $\alpha=1$ to force it to a LASSO model.
+
+```{r}
+# run 10-fold cv for lasso
+lasso_cv <- cv.glmnet(Xpred, response, nfolds = 10, alpha = 1)
+
+# determine optimal lambda
+lambda_opt_lasso <- lasso_cv$lambda.min
+```
+
+The optimal value of $\lambda$ that minimizes the cross validation error is $\lambda^*=$ `r round(lambda_opt_lasso, 4)`. What does the coefficient path look like as $\lambda$ varies?
+
+```{r}
+# fit lasso model
+model_lasso <- glmnet(Xpred, response, alpha = 1)
+
+# plot coefficient paths
+plot(model_lasso, xvar = "lambda", lwd = 2, label = TRUE)
+abline(v = log(lambda_opt_lasso), lwd = 2, lty = 2) # optimal lambda
+```
+
+Nine variables are selected using this value of $\lambda$, let's see what they are:
+
+```{r}
+coef(model_lasso, s = lambda_opt_lasso)
+```
+
+The LASSO regression selected all variables (including the intercept) except `X2Av`.
+
+### Question 6. Elastic Net
+
+We will repeat the same analysis with `glmnet` again, this time setting $\alpha=0.5$ to specify elastic net with equal weight to ridge and LASSO penalties.
+
+```{r}
+# run 10-fold cv for elastic net
+net_cv <- cv.glmnet(Xpred, response, nfolds = 10, alpha = 0.5)
+
+# determine optimal lambda
+lambda_opt_net <- net_cv$lambda.min
+```
+
+The optimal value of $\lambda$ that minimizes the cross validation error is $\lambda^*=$ `r round(lambda_opt_net, 4)`. Let's see which variables are selected using this parameter.
+
+```{r}
+model_net <- glmnet(Xpred, response, alpha = 0.5)
+coef(model_net, s = lambda_opt_net)
+```
+
+Using elastic net, the same variables are selected as those found using LASSO regression.
+
+### Question 7. Model Comparison
+
+Let's bring everything together and test several model against our `test` tibble we defined earlier. Specifically, we will be comparing:
+
+-   `model1`: Full model
+
+-   `model4`: Stepwise regression using backward elimination and BIC
+
+-   `model_ridge`: Ridge regression
+
+-   `model_lasso`: LASSO regression
+
+-   `model_net`: Equally-weighted elastic net regression
+
+```{r}
+# convert predictors of test tibble to matrix
+Xtest <- test %>%
+          select(-logBCF) %>% 
+          as.matrix()
+
+# predict based on specified model
+test$predict_full <- predict(model1, test)
+test$predict_back <- predict(model4, test)
+test$predict_ridge <- predict(model_ridge, Xtest, s = lambda_opt_ridge)
+test$predict_lasso <- predict(model_lasso, Xtest, s = lambda_opt_lasso)
+test$predict_net <- predict(model_net, Xtest, s = lambda_opt_net)
+
+test %>%
+  select(logBCF, predict_full, predict_back, predict_ridge, predict_lasso, predict_net) %>%
+  head(10)
+```
+
+Now we will compute the MSPE to determine which model performed the best.
+
+```{r}
+# compute mean squared prediction error for each model's predictions
+mspe_full <- mean((test$logBCF - test$predict_full)^2)
+mspe_back <- mean((test$logBCF - test$predict_back)^2)
+mspe_ridge <- mean((test$logBCF - test$predict_ridge)^2)
+mspe_lasso <- mean((test$logBCF - test$predict_lasso)^2)
+mspe_net <- mean((test$logBCF - test$predict_net)^2)
+
+# summmarize results in tibble
+tibble(Model = c("model1", "model4", "model_ridge", "model_lasso", "model_net"),
+       Method = c("Full", "Backward Stepwise", "Ridge", "LASSO", "Elastic Net"),
+       MSPE = c(mspe_full, mspe_back, mspe_ridge, mspe_lasso, mspe_net))
+```
+
+Using MSPE as our criterion, the backward stepwise regression model using BIC performed the best. The response variable is on a log scale so the MSPEs are all quite close.
+
+Let's compare which variables are selected by each of the five models we have been investigating in this problem.
+
+```{r}
+tibble(Variable = names(predictors),
+       Full = rep(1, 9),
+       `Backward Stepwise` = c(1, 1, 0, 0, 1, 0, 0, 0, 1),
+       Ridge = rep(1, 9),
+       LASSO = c(1, 1, 1, 0, 1, 1, 1, 1, 1),
+       `Elastic Net` = c(1, 1, 1, 0, 1, 1, 1, 1, 1))
+```
+
+The variables `nHM`, `piPC09`, `MLOGP`, and `F04[C-O]` were selected by every single method. Interestingly, `X2Av` was only selected by the full model and the ridge regression. These models do not exclude any variables by design, so we can be confident not to include this variable as a predictor in any model we build.
