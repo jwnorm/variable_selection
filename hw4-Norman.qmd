@@ -97,7 +97,7 @@ However at the 99 percent confidence level, only three coefficients are still si
 
 -   `F04[C-O]`
 
-Let's now compute the cross validation scores for 10-fold cross validation and leave-one-out cross validation. We will use the `boot` package to achieve this and use the function default for the cost function, **M**ean **S**quared **P**rediction **E**rror (MSPE).
+Let's now compute the **C**ross **V**alidation (CV) scores for 10-fold cross validation and leave-one-out cross validation. We will use the `boot` package to achieve this and use the function default for the cost function, **M**ean **S**quared **P**rediction **E**rror (MSPE).
 
 ```{r}
 # compute cv scores for 10-fold and leave-one-out cross validation
@@ -110,7 +110,7 @@ colnames(cv_scores) <- c("Raw MSPE", "Adjusted MSPE")
 add_column(as_tibble(cv_scores), `CV Type` = c("10-fold", "Leave-one-out"), .before = 1)
 ```
 
-These are both measures are almost equivalent for the two different cross validation methods. Let's now compute the AIC, BIC, and Mallow's $C_p$ values for the full model.
+Both error measures are almost equivalent for the two different CV methods. Let's now compute the AIC, BIC, and Mallow's $C_p$ values for the full model.
 
 ```{r}
 aic1 <- AIC(model1)
