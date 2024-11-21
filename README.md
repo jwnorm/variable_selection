@@ -4,4 +4,4 @@
 
 ## Overview
 
-This is project is based on the QSAR Bioconcentration data set from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/510/qsar+bioconcentration+classes+dataset). The Quarto Document walks through a variable selection analysis through a variety of techniques. There is also a section on regularization and prediction.
+This is project is based on the QSAR Bioconcentration data set from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/510/qsar+bioconcentration+classes+dataset). The Quarto Document walks through a variable selection analysis through a variety of techniques, including stepwise and elastic net regression. There is also sections on regularization, prediction, and model comparison.

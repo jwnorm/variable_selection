@@ -17,7 +17,7 @@ This is the fourth assignment for the course *ISE537: Statistical Models for Sys
 
 -   LASSO Regression
 
--   Elastic Net
+-   Elastic Net Regression
 
 To start, let's read in the required packages.
 
@@ -29,7 +29,7 @@ library(leaps)
 library(glmnet)
 ```
 
-The data set for this assignment was obtained from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/510/qsar+bioconcentration+classes+dataset). This one specifically is used for QSAR modeling. The following attributes are included:
+The data set for this assignment was obtained from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/510/qsar+bioconcentration+classes+dataset). This one is used for QSAR modeling. The following attributes are included:
 
 -   `nHM`: Number of heavy atoms
 
@@ -70,18 +70,16 @@ train <- data[-test_rows,]
 
 ### Question 1. Full Model
 
-To begin, let's fit a linear regression model with `logBCF` as the response and all other variable as the predictors.
+To begin, let's fit a linear regression model with `logBCF` as the response and all other variables as the predictors.
 
 ```{r}
-model1 <- lm(logBCF ~ ., data = train)
+model1 <- lm(logBCF ~ ., train)
 summary(model1)
 ```
 
 At the 95 percent confidence level, the following coefficients are significant:
 
 -   `nHM`
-
--   `piPC09`
 
 -   `MLOGP`
 
@@ -112,7 +110,7 @@ colnames(cv_scores) <- c("Raw MSPE", "Adjusted MSPE")
 add_column(as_tibble(cv_scores), `CV Type` = c("10-fold", "Leave-one-out"), .before = 1)
 ```
 
-Let's compute the AIC, BIC, and Mallow's $C_p$ values for the full model.
+These are both measures are almost equivalent for the two different cross validation methods. Let's now compute the AIC, BIC, and Mallow's $C_p$ values for the full model.
 
 ```{r}
 aic1 <- AIC(model1)
@@ -145,6 +143,8 @@ We will now begin variable selection starting with the full model, `model1`. To 
 response <- train$logBCF
 predictors <- train %>% select(-logBCF)
 ```
+
+Let's enumerate through all possible combinations of predictors and display the best model for each number based on the lowest value of Mallow's $C_p$.
 
 ```{r}
 # select best model predictors using Cp
@@ -221,7 +221,7 @@ summary(model5)
 
 Using forward selection with AIC resulted in a model that has a different number of predictors when compared to `model4`. The same four selected using backward elimination are included, plus two additional ones:
 
--   `B0[C-N]`
+-   `B02[C-N]`
 
 -   `ON1V`
 
@@ -237,7 +237,7 @@ adj_rsq3 <- summary(model3)$adj.r.squared
 
 aic4 <- AIC(model4)
 bic4 <- BIC(model4)
-cp4 <- olsrr::ols_mallows_cp(model3, model4)
+cp4 <- olsrr::ols_mallows_cp(model4, model1)
 adj_rsq4 <- summary(model4)$adj.r.squared
 
 tibble(Model = c("model1", "model3", "model4"),
@@ -247,7 +247,7 @@ tibble(Model = c("model1", "model3", "model4"),
        `Adj. R2` = c(adj_rsq1, adj_rsq3, adj_rsq4))
 ```
 
-Using the above measures to evaluate the models, I would select `model4` as the preferred model. This is because all three models have similar AIC, BIC, and adjusted $R^2$ values, but the Mallow's $C_p$ value for `model4` is significantly lower than the other two.
+Using the above measures to evaluate the models, I would select `model3` as the preferred model. This is because it has the best AIC, Mallow's $C_p$, and adjusted $R^2$ value among the three models. The BIC for `model3` is slightly higher than `model4`, but it has by far the best Mallow's $C_p$.
 
 ### Question 4. Ridge Regression
 
@@ -271,7 +271,16 @@ model_ridge <- glmnet(Xpred, response, alpha = 0)
 coef(model_ridge, s = lambda_opt_ridge)
 ```
 
-We can see that *all* of the variables are selected. This is because ridge regression is not a variable selection technique, but rather is used for regularization. We can see that all estimated model coefficients are different from what we observed in our full model. This attempts to adjust for potential multicollinearity.
+We can see that *all* of the variables are selected. This is because ridge regression is not a variable selection technique, but rather is used for regularization.
+
+Instead, the estimated model coefficients are different from what we observed in our full model. This attempts to adjust for potential multicollinearity. Interestingly, the magnitude of almost all of the coefficients is larger than we have observed in the full model. Let's plot the path of the coefficients to investigate further:
+
+```{r}
+plot(model_ridge, xvar = "lambda", lwd = 2, label = TRUE)
+abline(v = log(lambda_opt_ridge), lwd = 2, lty = 2) # optimal lambda
+```
+
+We can observe that there is a bow shape to many of the coefficient paths, implying that there are values of $\lambda$ where the magnitude of the coefficients is larger in ridge regression than in the ordinary least squares model. This might explain why there seems to be no shrinkage.
 
 ### Question 5. LASSO Regression
 
@@ -285,7 +294,7 @@ lasso_cv <- cv.glmnet(Xpred, response, nfolds = 10, alpha = 1)
 lambda_opt_lasso <- lasso_cv$lambda.min
 ```
 
-The optimal value of $\lambda$ that minimizes the cross validation error is $\lambda^*=$ `r round(lambda_opt_lasso, 4)`. What does the coefficient path look like as $\lambda$ varies?
+The optimal value of $\lambda$ that minimizes the cross validation error is $\lambda^*=$ `r round(lambda_opt_lasso, 4)`. What does the regression coefficient path plot look like as $\lambda$ varies?
 
 ```{r}
 # fit lasso model
@@ -296,7 +305,7 @@ plot(model_lasso, xvar = "lambda", lwd = 2, label = TRUE)
 abline(v = log(lambda_opt_lasso), lwd = 2, lty = 2) # optimal lambda
 ```
 
-Nine variables are selected using this value of $\lambda$, let's see what they are:
+Nine variables are selected using this value of $\lambda$; let's see what they are:
 
 ```{r}
 coef(model_lasso, s = lambda_opt_lasso)
@@ -323,11 +332,11 @@ model_net <- glmnet(Xpred, response, alpha = 0.5)
 coef(model_net, s = lambda_opt_net)
 ```
 
-Using elastic net, the same variables are selected as those found using LASSO regression.
+Using elastic net, the same nine variables (including intercept) are selected as those determined by LASSO regression. However, they have different values compared to the LASSO model since there is a ridge component being applied to them.
 
 ### Question 7. Model Comparison
 
-Let's bring everything together and test several model against our `test` tibble we defined earlier. Specifically, we will be comparing:
+Let's bring everything together and test several models against our `test` tibble we defined earlier. Specifically, we will be comparing:
 
 -   `model1`: Full model
 
@@ -373,7 +382,7 @@ tibble(Model = c("model1", "model4", "model_ridge", "model_lasso", "model_net"),
        MSPE = c(mspe_full, mspe_back, mspe_ridge, mspe_lasso, mspe_net))
 ```
 
-Using MSPE as our criterion, the backward stepwise regression model using BIC performed the best. The response variable is on a log scale so the MSPEs are all quite close.
+Using MSPE as our criterion, the backward stepwise regression model using BIC performed the best. The corresponds to `model4`. Since the response variable is on a log scale, the MSPEs are all quite close.
 
 Let's compare which variables are selected by each of the five models we have been investigating in this problem.
 
@@ -386,4 +395,4 @@ tibble(Variable = names(predictors),
        `Elastic Net` = c(1, 1, 1, 0, 1, 1, 1, 1, 1))
 ```
 
-The variables `nHM`, `piPC09`, `MLOGP`, and `F04[C-O]` were selected by every single method. Interestingly, `X2Av` was only selected by the full model and the ridge regression. These models do not exclude any variables by design, so we can be confident not to include this variable as a predictor in any model we build.
+The variables `nHM`, `piPC09`, `MLOGP`, and `F04[C-O]` were selected by every single method. Interestingly, `X2Av` was only selected by the full model and the ridge regression model. These models do not exclude any variables by design, so we can be confident not to include this variable as a predictor in any model we build.
